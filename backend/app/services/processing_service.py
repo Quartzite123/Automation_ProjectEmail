@@ -503,6 +503,7 @@ def send_client_mis_emails(batch_folder: str, clients: list = None, limit: int =
         body = (
             f"Dear Sir,\n\n"
             f"Kindly find attached MIS for last 30 days.\n\n"
+            f"For any query, reach out to our customer support at harshalpatil@kiirusxpress.com\n\n"
             f"Regards,\nKiirusxpress Team"
         )
 
