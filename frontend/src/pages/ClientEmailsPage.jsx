@@ -5,6 +5,7 @@ import {
     getAdminClients,
     upsertAdminClient,
     deleteAdminClient,
+    bulkImportClients,
 } from '../services/api';
 
 // ---------------------------------------------------------------------------
@@ -218,6 +219,141 @@ function ClientModal({ initial, onSave, onClose, loading }) {
 }
 
 // ---------------------------------------------------------------------------
+// Bulk Import Modal
+// ---------------------------------------------------------------------------
+
+function BulkImportModal({ onImport, onClose, loading }) {
+    const [text, setText] = useState('');
+    const [error, setError] = useState('');
+    const [preview, setPreview] = useState([]);
+
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    // Re-parse preview whenever text changes
+    useEffect(() => {
+        if (!text.trim()) { setPreview([]); return; }
+        const parsed = parseInput(text);
+        setPreview(parsed.valid);
+    }, [text]);
+
+    const parseInput = (raw) => {
+        const valid = [];
+        const invalid = [];
+
+        for (const line of raw.split('\n')) {
+            const parts = line.split(',').map((p) => p.trim()).filter(Boolean);
+            if (!parts.length) continue;
+
+            const client_name = parts[0].toUpperCase();
+            const emails = parts
+                .slice(1)
+                .map((e) => e.toLowerCase())
+                .filter((e) => EMAIL_RE.test(e));
+
+            // Deduplicate
+            const deduped = [...new Set(emails)];
+
+            if (!client_name) { invalid.push(line); continue; }
+            if (deduped.length === 0) { invalid.push(line); continue; }
+            if (deduped.length > 5) { invalid.push(`${client_name}: max 5 emails`); continue; }
+
+            valid.push({ client_name, emails: deduped });
+        }
+
+        return { valid, invalid };
+    };
+
+    const handleImport = () => {
+        setError('');
+        if (!text.trim()) return setError('Paste at least one line of data.');
+
+        const { valid, invalid } = parseInput(text);
+
+        if (invalid.length) {
+            setError(
+                `${invalid.length} line(s) could not be parsed: ensure format is\n` +
+                `CLIENT NAME,email1@example.com,email2@example.com`
+            );
+            return;
+        }
+        if (!valid.length) return setError('No valid clients found.');
+
+        onImport(valid);
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 p-6 flex flex-col gap-4">
+                <div>
+                    <h2 className="text-base font-semibold text-gray-900">Bulk Import Clients</h2>
+                    <p className="text-xs text-gray-500 mt-1">
+                        One client per line. Format:
+                        <code className="ml-1 px-1 py-0.5 bg-gray-100 rounded text-[11px]">
+                            CLIENT NAME,email1@example.com,email2@example.com
+                        </code>
+                    </p>
+                </div>
+
+                <textarea
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    rows={8}
+                    placeholder={
+                        'AJANTA PHARMA,mis@ajanta.com,accounts@ajanta.com\n' +
+                        'ENZA ZADEN,enza@company.com\n' +
+                        'CLIENT C,info@clientc.com'
+                    }
+                    className="w-full px-3 py-2 text-sm font-mono border border-gray-200 rounded-lg focus:ring-2 focus:ring-red-300 focus:border-red-400 outline-none resize-none transition"
+                />
+
+                {/* Preview */}
+                {preview.length > 0 && (
+                    <div className="bg-gray-50 rounded-lg px-3 py-2 text-xs text-gray-600 max-h-32 overflow-y-auto">
+                        <p className="font-semibold text-gray-700 mb-1">
+                            {preview.length} client{preview.length !== 1 ? 's' : ''} ready to import:
+                        </p>
+                        {preview.map((c) => (
+                            <div key={c.client_name} className="truncate">
+                                <span className="font-medium">{c.client_name}</span>
+                                <span className="text-gray-400 ml-1">→ {c.emails.join(', ')}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                {error && (
+                    <p className="text-xs text-red-500 bg-red-50 border border-red-100 rounded-lg px-3 py-2 whitespace-pre-line">
+                        {error}
+                    </p>
+                )}
+
+                <div className="flex gap-3 justify-end">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        disabled={loading}
+                        className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 transition"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleImport}
+                        disabled={loading || !preview.length}
+                        className="px-5 py-2 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 disabled:opacity-50 transition flex items-center gap-2"
+                    >
+                        {loading && (
+                            <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                        )}
+                        Import {preview.length > 0 ? `(${preview.length})` : ''}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -233,6 +369,8 @@ export default function ClientEmailsPage() {
     const [modalBusy,  setModalBusy]  = useState(false);
     const [deleteTarget, setDeleteTarget] = useState(null); // client_name string
     const [deleteBusy,   setDeleteBusy]   = useState(false);
+    const [bulkModal,    setBulkModal]    = useState(false);
+    const [bulkBusy,     setBulkBusy]    = useState(false);
     const [toast,      setToast]      = useState(null); // { message, type }
 
     const showToast = useCallback((message, type = 'success') => {
@@ -282,6 +420,43 @@ export default function ClientEmailsPage() {
         }
     };
 
+    // ── Bulk Import ──────────────────────────────────────────────────────
+    const handleBulkImport = async (clientsArray) => {
+        setBulkBusy(true);
+        try {
+            // Ensure emails is always an array and data is clean before sending
+            const payload = clientsArray.map((c) => ({
+                client_name: c.client_name.trim().toUpperCase(),
+                emails: (Array.isArray(c.emails) ? c.emails : [c.emails])
+                    .map((e) => e.trim().toLowerCase())
+                    .filter(Boolean),
+            }));
+            const result = await bulkImportClients(payload);
+            showToast(
+                `Bulk import complete — ${result.inserted ?? 0} added, ${result.modified ?? 0} updated.`
+            );
+            setBulkModal(false);
+            fetchClients();
+        } catch (err) {
+            const detail = err?.response?.data?.detail;
+            if (typeof detail === 'object' && detail?.error) {
+                showToast(detail.error, 'error');
+            } else if (err?.response?.status === 422) {
+                showToast(
+                    'Some client emails are invalid or exceed the limit of 5.',
+                    'error'
+                );
+            } else {
+                showToast(
+                    typeof detail === 'string' ? detail : 'Bulk import failed.',
+                    'error'
+                );
+            }
+        } finally {
+            setBulkBusy(false);
+        }
+    };
+
     // ── Delete ─────────────────────────────────────────────────────────────
     const handleDelete = async () => {
         setDeleteBusy(true);
@@ -317,6 +492,13 @@ export default function ClientEmailsPage() {
                     placeholder="Search by name or email…"
                     className="flex-1 px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-300 focus:border-red-400 outline-none transition"
                 />
+                <button
+                    onClick={() => setBulkModal(true)}
+                    className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-xl hover:bg-red-100 active:bg-red-200 transition shrink-0"
+                >
+                    <span className="text-base leading-none">⇧</span>
+                    Bulk Import
+                </button>
                 <button
                     onClick={() => setModal({ mode: 'add' })}
                     className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-red-500 rounded-xl hover:bg-red-600 active:bg-red-700 transition shrink-0"
@@ -430,6 +612,15 @@ export default function ClientEmailsPage() {
                     </div>
                 )}
             </div>
+
+            {/* Bulk import modal */}
+            {bulkModal && (
+                <BulkImportModal
+                    onImport={handleBulkImport}
+                    onClose={() => setBulkModal(false)}
+                    loading={bulkBusy}
+                />
+            )}
 
             {/* Add / Edit modal */}
             {modal && (

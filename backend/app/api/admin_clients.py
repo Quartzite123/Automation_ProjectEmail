@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, EmailStr, field_validator
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, EmailStr, ValidationError, field_validator
 
 from app.auth.dependencies import require_admin
 from app.database import get_db
@@ -204,23 +204,22 @@ async def save_client(
 
 @router.post("/bulk", status_code=status.HTTP_200_OK)
 async def save_clients_bulk(
-    body: BulkClientEmailIn,
+    request: Request,
     admin: CurrentUser = Depends(require_admin),
 ):
     """
     Bulk upsert many client emails in a single MongoDB bulk_write call.
 
-    Designed for post-upload flows where many clients may be missing.
-    Handles up to 10 000 clients efficiently via ordered=False bulk_write.
+    Accepts BOTH body formats:
+        Format A (array):    [{"client_name": ..., "emails": [...]}, ...]
+        Format B (wrapped):  {"clients": [{"client_name": ..., "emails": [...]}, ...]}
+
+    Each client:
+        client_name  → trimmed + uppercased
+        emails       → list[str], 1-5 valid addresses, duplicates removed
+                       also accepts a bare string for backward compat
 
     POST /api/admin/clients/bulk
-    Body:
-        {
-            "clients": [
-                { "client_name": "CLIENT A", "email": "a@mail.com" },
-                { "client_name": "CLIENT B", "email": "b@mail.com" }
-            ]
-        }
 
     Response:
         {
@@ -230,15 +229,74 @@ async def save_clients_bulk(
             "total":    2
         }
     """
-    if not body.clients:
+    # ── Parse raw body ────────────────────────────────────────────────────
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON body — could not parse request.",
+        )
+
+    print("Bulk clients payload:", raw)
+
+    # ── Normalise to list — accept both formats ───────────────────────────
+    if isinstance(raw, list):
+        clients_raw: list = raw
+    elif isinstance(raw, dict) and "clients" in raw:
+        clients_raw = raw["clients"]
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Invalid format. Send a JSON array [...] or {"clients": [...]}.',
+        )
+
+    if not clients_raw:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="clients list must not be empty",
         )
 
-    result = await bulk_save_clients(
-        [{"client_name": c.client_name, "emails": c.emails} for c in body.clients]
-    )
+    # ── Validate each client via ClientEmailIn ────────────────────────────
+    validated: list[dict] = []
+    errors: list[str] = []
+
+    for item in clients_raw:
+        if not isinstance(item, dict):
+            errors.append("Each entry must be a JSON object with client_name and emails.")
+            continue
+
+        raw_name = str(item.get("client_name") or "").strip().upper()
+
+        # Also accept bare 'email' string for backward compat
+        raw_emails = item.get("emails") or item.get("email")
+        if isinstance(raw_emails, str):
+            raw_emails = [raw_emails]
+        if raw_emails is not None:
+            item = {**item, "emails": raw_emails}
+
+        try:
+            parsed = ClientEmailIn(**item)
+        except (ValidationError, Exception) as exc:
+            label = raw_name or "UNKNOWN"
+            email_count = len(raw_emails) if isinstance(raw_emails, list) else 0
+            if email_count > 5:
+                errors.append(f"Client {label} has invalid emails. Max 5 allowed.")
+            elif not raw_emails:
+                errors.append(f"Client {label} has no emails. At least one is required.")
+            else:
+                errors.append(f"Client {label} has invalid emails. Max 5 allowed.")
+            continue
+
+        validated.append({"client_name": parsed.client_name, "emails": parsed.emails})
+
+    if errors:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": errors[0], "all_errors": errors},
+        )
+
+    result = await bulk_save_clients(validated)
     return result
 
 

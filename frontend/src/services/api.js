@@ -97,6 +97,12 @@ export const deleteAdminClient = async (client_name) => {
     return response.data;
 };
 
+// Bulk upsert — sends a raw array: [{client_name, emails}, ...]
+export const bulkImportClients = async (clientsArray) => {
+    const response = await api.post('/admin/clients/bulk', clientsArray);
+    return response.data;
+};
+
 // ---------------------------------------------------------------------------
 // Upload
 // ---------------------------------------------------------------------------
