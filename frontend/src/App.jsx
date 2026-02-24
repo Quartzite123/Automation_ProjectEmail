@@ -11,6 +11,7 @@ import BatchDetailsPage from './pages/BatchDetailsPage';
 import EmailPage from './pages/EmailPage';
 import EmailLogs from './pages/EmailLogs';
 import AdminPage from './pages/AdminPage';
+import ClientEmailsPage from './pages/ClientEmailsPage';
 
 function App() {
   return (
@@ -43,6 +44,14 @@ function App() {
               element={
                 <ProtectedRoute adminOnly>
                   <AdminPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="admin/clients"
+              element={
+                <ProtectedRoute adminOnly>
+                  <ClientEmailsPage />
                 </ProtectedRoute>
               }
             />

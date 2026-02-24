@@ -99,6 +99,35 @@ async def insert_email_log(log_doc: dict) -> None:
     await db["email_logs"].insert_one(log_doc)
 
 
+async def update_client_email_result(
+    batch_id: str,
+    safe_name: str,
+    status: str,
+    sent_at: str,
+) -> bool:
+    """
+    Update a client's email send status AND sent_at timestamp atomically.
+
+    Parameters
+    ----------
+    batch_id : str
+    safe_name: str    — clients[].safe_name (underscore form)
+    status   : str    — "sent" | "failed"
+    sent_at  : str    — ISO datetime string
+    """
+    db = get_db()
+    result = await db["batches"].update_one(
+        {"batch_id": batch_id, "clients.safe_name": safe_name},
+        {
+            "$set": {
+                "clients.$.status":  status,
+                "clients.$.sent_at": sent_at,
+            }
+        },
+    )
+    return result.modified_count > 0
+
+
 async def get_all_email_logs() -> list:
     """Return all email log entries sorted newest first."""
     db = get_db()

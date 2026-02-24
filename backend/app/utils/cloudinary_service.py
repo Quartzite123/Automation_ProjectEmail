@@ -97,6 +97,47 @@ def upload_excel(local_path: str, batch_id: str, folder_type: str, file_name: st
         raise RuntimeError(f"Cloudinary upload failed for '{file_name}': {e}") from e
 
 
+def upload_mis_file(local_path: str, client_name: str) -> dict:
+    """
+    Upload a client MIS Excel file to Cloudinary.
+
+    The file is stored under:
+        kiirus/mis/<SAFE_CLIENT_NAME>
+
+    Args:
+        local_path  : absolute path to the .xlsx file on disk
+        client_name : client name as stored in MongoDB (e.g. "PERKINS INDIA")
+
+    Returns:
+        {"url": "<secure_url>", "public_id": "<public_id>"}
+
+    Raises:
+        RuntimeError on Cloudinary failure.
+    """
+    if not os.path.exists(local_path):
+        raise FileNotFoundError(f"MIS file not found: {local_path}")
+
+    _ensure_configured()
+
+    safe_name = client_name.strip().upper().replace(" ", "_").replace("/", "_")
+    public_id = f"kiirus/mis/{safe_name}"
+
+    try:
+        response = cloudinary.uploader.upload(
+            local_path,
+            resource_type="raw",
+            public_id=public_id,
+            overwrite=True,
+            invalidate=True,
+        )
+        return {
+            "url": response["secure_url"],
+            "public_id": response["public_id"],
+        }
+    except Exception as e:
+        raise RuntimeError(f"Cloudinary MIS upload failed for '{client_name}': {e}") from e
+
+
 # ---------------------------------------------------------------------------
 # Download (used when attaching to SES email)
 # ---------------------------------------------------------------------------

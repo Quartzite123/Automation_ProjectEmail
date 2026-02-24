@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Upload, FolderOpen, Mail, Zap, ShieldCheck, LogOut, User } from 'lucide-react';
+import { Upload, FolderOpen, Mail, Zap, ShieldCheck, LogOut, User, Users } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const Sidebar = () => {
@@ -16,7 +16,10 @@ const Sidebar = () => {
         ...(canWrite ? [{ name: 'Upload', path: '/upload', icon: Upload }] : []),
         { name: 'Files', path: '/files', icon: FolderOpen },
         { name: 'Email Logs', path: '/logs', icon: Mail },
-        ...(isAdmin ? [{ name: 'Admin', path: '/admin', icon: ShieldCheck }] : []),
+        ...(isAdmin ? [
+            { name: 'Admin', path: '/admin', icon: ShieldCheck },
+            { name: 'Client Emails', path: '/admin/clients', icon: Users },
+        ] : []),
     ];
 
     return (

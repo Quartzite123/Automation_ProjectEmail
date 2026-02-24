@@ -26,3 +26,12 @@ ACCESS_TOKEN_EXPIRE_HOURS = int(os.getenv("ACCESS_TOKEN_EXPIRE_HOURS", "24"))
 CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "")
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "")
 CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "")
+
+# MIS Email — mandatory CC recipients for every outbound MIS report
+MIS_CC_EMAILS: list[str] = [
+    os.getenv("MIS_CC_1", "sushil.katrale@kiirusxpress.com"),
+    os.getenv("MIS_CC_2", "harshal.patil@kiirusxpress.com"),
+]
+
+# Support contact shown in outbound MIS emails
+SUPPORT_EMAIL: str = os.getenv("SUPPORT_EMAIL", "customer.support@kiirusxpress.com")

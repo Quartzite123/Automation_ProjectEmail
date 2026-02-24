@@ -53,17 +53,15 @@ def validate_aws_credentials():
     print(f"   Sender Name: {settings.SES_SENDER_NAME}")
     print(f"   Access Key ID: {settings.AWS_ACCESS_KEY_ID[:10]}...")
     
-    # Test SES connection
+    # Test SES connection using list_identities (requires only ses:ListIdentities)
     try:
         client = get_ses_client()
-        # Try to get send quota to verify credentials
-        response = client.get_send_quota()
-        
+        response = client.list_identities(IdentityType="EmailAddress", MaxItems=10)
+        verified = response.get("Identities", [])
+
         print(f"\n✅ AWS SES credentials validated successfully!")
-        print(f"   Max Send Rate: {response['MaxSendRate']} emails/second")
-        print(f"   Max 24 Hour Send: {response['Max24HourSend']}")
-        print(f"   Sent Last 24 Hours: {response['SentLast24Hours']}\n")
-        
+        print(f"   Verified email identities: {verified if verified else '(none yet)'}\n")
+
         return True
         
     except NoCredentialsError:

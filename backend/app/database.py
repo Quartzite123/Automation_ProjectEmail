@@ -1,5 +1,8 @@
 """
 MongoDB connection setup using Motor (async driver).
+
+Index creation is delegated to app/db/indexes.py so that all collection
+indexes are declared in one place and easy to extend.
 """
 import motor.motor_asyncio
 from app.config.settings import MONGODB_URL
@@ -12,14 +15,11 @@ async def connect_to_mongo():
     global client, db
     client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URL)
     db = client["kiirus_automation"]
-    # Ensure unique index on email
-    await db["users"].create_index("email", unique=True)
-    # Batch persistence indexes
-    await db["batches"].create_index("batch_id", unique=True)
-    await db["batches"].create_index("created_at")
-    # Email log indexes
-    await db["email_logs"].create_index("batch_id")
-    await db["email_logs"].create_index("sent_at")
+
+    # Delegate all index creation to the centralised index module.
+    from app.db.indexes import create_indexes
+    await create_indexes(db)
+
     print("✅ Connected to MongoDB")
 
 

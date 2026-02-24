@@ -1,16 +1,17 @@
 """
 Batch routes — all data served from MongoDB for full persistence.
+The system is stateless; no local batch folders or meta.json files are used.
 
-GET /api/batches/           → list all batches (summary, no clients array)
-GET /api/batches/recent     → last 5 batches (summary)
-GET /api/batches/{batch_id} → full batch details including clients
-GET /api/batches/{batch_id}/clients → client list (kept for backward compat)
+GET /api/batches/                    → list all batches (summary)
+GET /api/batches/recent              → last 5 batches (summary)
+GET /api/batches/{batch_id}         → full batch document including clients
+GET /api/batches/{batch_id}/clients → client list
+GET /api/batches/{batch_id}/download/{file_type} → master/email/mother file
 """
 
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse, RedirectResponse
 import os
-import json
 
 from app.services.batch_mongo_service import (
     get_all_batches,
@@ -23,7 +24,6 @@ from app.models.user_model import CurrentUser
 
 router = APIRouter()
 _batch_service = BatchService()
-STORAGE_DIR = "app/storage/batches"
 
 
 # ---------------------------------------------------------------------------
@@ -45,58 +45,22 @@ async def list_batches(current_user: CurrentUser = Depends(require_read_access))
 
 @router.get("/{batch_id}")
 async def get_batch(batch_id: str, current_user: CurrentUser = Depends(require_read_access)):
-    """
-    Full batch document including clients array.
-    Served from MongoDB; falls back to local meta.json for legacy batches.
-    """
+    """Full batch document including clients array. Served from MongoDB."""
     batch = await get_batch_by_id(batch_id)
     if batch:
         return batch
-
-    # Fallback: local meta.json (pre-MongoDB batches)
-    meta_path = os.path.join(STORAGE_DIR, batch_id, "meta.json")
-    if not os.path.exists(meta_path):
-        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
-    try:
-        with open(meta_path, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found in database.")
 
 
 
 
 @router.get("/{batch_id}/clients")
 async def get_batch_clients(batch_id: str, current_user: CurrentUser = Depends(require_read_access)):
-    """
-    Client list for a batch.
-    Prefers MongoDB data; falls back to local folder for legacy batches.
-    """
+    """Client list for a batch. Served from MongoDB."""
     batch = await get_batch_by_id(batch_id)
-    if batch and batch.get("clients"):
-        return batch["clients"]
-
-    # Legacy fallback
-    batch_folder = os.path.join(STORAGE_DIR, batch_id)
-    mapping_path = os.path.join(batch_folder, "client_email_map.json")
-    if not os.path.exists(mapping_path):
-        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
-
-    with open(mapping_path, "r") as f:
-        email_map: dict = json.load(f)
-
-    client_folder = os.path.join(batch_folder, "client_files")
-    files = (
-        [fi for fi in os.listdir(client_folder) if fi.endswith(".xlsx")]
-        if os.path.exists(client_folder) else []
-    )
-    result = []
-    for filename in sorted(files):
-        client_key  = filename.replace(".xlsx", "")
-        client_name = client_key.replace("_", " ").strip()
-        email = email_map.get(client_name) or email_map.get(client_name.upper(), "")
-        result.append({"client_name": client_name, "email": email, "file_name": filename})
-    return result
+    if not batch:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found in database.")
+    return batch.get("clients", [])
 
 
 @router.get("/{batch_id}/download/{file_type}")

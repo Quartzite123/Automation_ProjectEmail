@@ -1,5 +1,5 @@
 """
-Admin-only user management routes.
+Admin-only routes: user management + client email management.
 All endpoints require admin role.
 """
 from fastapi import APIRouter, HTTPException, Depends, status
@@ -13,6 +13,7 @@ from app.models.user_model import (
     CurrentUser,
 )
 from typing import List
+from app.api.admin_clients import router as clients_router
 
 router = APIRouter()
 
@@ -133,3 +134,16 @@ async def delete_user(
 
     await users_col.delete_one({"email": email})
     return {"message": f"User {email} deleted"}
+
+
+# ===========================================================================
+# Client management  (admin-only) — delegated to app/api/admin_clients.py
+# ===========================================================================
+
+# Include the full-featured admin_clients router under /clients.
+# This provides:
+#   GET    /api/admin/clients                — list (paginated + search)
+#   POST   /api/admin/clients                — upsert single
+#   POST   /api/admin/clients/bulk           — bulk upsert
+#   DELETE /api/admin/clients/{client_name}  — delete
+router.include_router(clients_router, prefix="/clients", tags=["Admin - Clients"])

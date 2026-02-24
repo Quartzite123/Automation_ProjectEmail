@@ -1,6 +1,6 @@
 ﻿import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CloudUpload, CheckCircle, FileText, X, AlertCircle, Clock, ChevronRight } from 'lucide-react';
+import { CloudUpload, CheckCircle, FileText, X, AlertCircle, Clock, ChevronRight, Save } from 'lucide-react';
 import api from '../services/api';
 import WriteAccess from '../components/WriteAccess';
 
@@ -91,10 +91,22 @@ const DropZone = ({ label, description, file, onFile }) => {
 // ---------------------------------------------------------------------------
 const UploadPage = () => {
     const navigate = useNavigate();
+
+    // Derive admin status once on mount
+    const isAdmin = (() => {
+        try { return JSON.parse(sessionStorage.getItem('user'))?.role === 'admin'; }
+        catch { return false; }
+    })();
+
     const [rawFile, setRawFile] = useState(null);
-    const [emailFile, setEmailFile] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [missingClients, setMissingClients] = useState([]);
+
+    // Admin email-entry form state
+    const [clientEmails, setClientEmails] = useState({});
+    const [saveLoading, setSaveLoading] = useState(false);
+    const [saveSuccess, setSaveSuccess] = useState(false);
 
     // Recent batches
     const [recentBatches, setRecentBatches] = useState([]);
@@ -107,26 +119,82 @@ const UploadPage = () => {
             .finally(() => setRecentLoading(false));
     }, []);
 
-    const canSubmit = rawFile && emailFile && !loading;
+    const canSubmit = rawFile && !loading;
 
     const handleSubmit = async () => {
         if (!canSubmit) return;
         setLoading(true);
         setError('');
+        setMissingClients([]);
+        setClientEmails({});
+        setSaveSuccess(false);
         try {
             const formData = new FormData();
             formData.append('master_file', rawFile);
-            formData.append('email_file', emailFile);
             const res = await api.post('/upload/master', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
                 timeout: 120000,
             });
-            // Navigate to batch details page
-            navigate(`/batches/${res.data.batch_id}`);
+
+            const data = res.data;
+
+            if (data.status === 'missing_clients') {
+                setMissingClients(data.missing_clients || []);
+                setError('Some clients are missing email addresses. Please contact an admin to add them.');
+                setLoading(false);
+                return;
+            }
+
+            if (data.status === 'failed') {
+                setError(data.message || 'Upload failed. Please contact an admin.');
+                setMissingClients(data.missing_clients || []);
+                setLoading(false);
+                return;
+            }
+
+            // status === 'success'
+            navigate(`/batches/${data.batch_id}`);
         } catch (e) {
             const detail = e.response?.data?.detail;
-            setError(Array.isArray(detail) ? detail.map(d => d.msg).join(', ') : (detail || e.message));
+            if (detail && typeof detail === 'object' && detail.missing_clients) {
+                setMissingClients(detail.missing_clients);
+                setError(detail.message || 'Missing client emails. Please contact admin.');
+            } else {
+                setError(Array.isArray(detail) ? detail.map(d => d.msg).join(', ') : (detail || e.message));
+            }
             setLoading(false);
+        }
+    };
+
+    const handleEmailChange = (clientName, value) => {
+        setClientEmails(prev => ({ ...prev, [clientName]: value }));
+    };
+
+    const canSaveEmails =
+        missingClients.length > 0 &&
+        missingClients.every(c => (clientEmails[c] || '').trim() !== '');
+
+    const handleSaveEmails = async () => {
+        if (!canSaveEmails) return;
+        setSaveLoading(true);
+        setSaveSuccess(false);
+        try {
+            const payload = {
+                clients: missingClients.map(c => ({
+                    client_name: c,
+                    email: clientEmails[c].trim(),
+                })),
+            };
+            await api.post('/admin/clients/bulk', payload);
+            setSaveSuccess(true);
+            setMissingClients([]);
+            setClientEmails({});
+            setError('');
+        } catch (e) {
+            const detail = e.response?.data?.detail;
+            setError(typeof detail === 'string' ? detail : 'Failed to save emails. Please try again.');
+        } finally {
+            setSaveLoading(false);
         }
     };
 
@@ -143,7 +211,7 @@ const UploadPage = () => {
             <div>
                 <h1 className="text-2xl font-semibold text-gray-900">Upload Files</h1>
                 <p className="text-gray-500 mt-1 text-sm">
-                    Upload raw shipment file and client email file to create a batch.
+                    Upload raw shipment file to create a batch.
                 </p>
             </div>
 
@@ -155,17 +223,77 @@ const UploadPage = () => {
                     file={rawFile}
                     onFile={setRawFile}
                 />
-                <DropZone
-                    label="Upload Email File"
-                    description="Upload file containing Client Name and Client Email"
-                    file={emailFile}
-                    onFile={setEmailFile}
-                />
 
-                {error && (
+                {/* ── Save-success banner ── */}
+                {saveSuccess && (
+                    <div className="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg px-4 py-3">
+                        <CheckCircle size={16} className="shrink-0" />
+                        <span>Emails saved successfully. Please upload the file again to continue.</span>
+                    </div>
+                )}
+
+                {/* ── Generic error (no missing clients) ── */}
+                {error && missingClients.length === 0 && (
                     <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">
                         <AlertCircle size={16} className="mt-0.5 shrink-0" />
                         <span>{error}</span>
+                    </div>
+                )}
+
+                {/* ── Missing clients panel ── */}
+                {missingClients.length > 0 && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-4">
+                        <div className="flex items-start gap-2 text-amber-800">
+                            <AlertCircle size={16} className="mt-0.5 shrink-0 text-amber-500" />
+                            <div>
+                                <p className="text-sm font-semibold">Missing client email addresses</p>
+                                {isAdmin
+                                    ? <p className="text-xs text-amber-700 mt-0.5">Please add emails for missing clients below, then re-upload.</p>
+                                    : <p className="text-xs text-amber-700 mt-0.5">Please contact an admin to add the missing emails before uploading.</p>
+                                }
+                            </div>
+                        </div>
+
+                        {isAdmin ? (
+                            /* ── Admin: email entry form ── */
+                            <div className="space-y-3">
+                                {missingClients.map(client => (
+                                    <div key={client} className="flex items-center gap-3">
+                                        <span className="w-52 shrink-0 text-xs font-mono font-medium text-gray-800 truncate" title={client}>
+                                            {client}
+                                        </span>
+                                        <input
+                                            type="email"
+                                            placeholder="email@example.com"
+                                            value={clientEmails[client] || ''}
+                                            onChange={e => handleEmailChange(client, e.target.value)}
+                                            className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                        />
+                                    </div>
+                                ))}
+
+                                <button
+                                    onClick={handleSaveEmails}
+                                    disabled={!canSaveEmails || saveLoading}
+                                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-150
+                                        ${canSaveEmails && !saveLoading
+                                            ? 'bg-blue-600 text-white hover:bg-blue-700 active:scale-[0.98] shadow-sm'
+                                            : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+                                >
+                                    <Save size={14} />
+                                    {saveLoading ? 'Saving…' : 'Save Emails'}
+                                </button>
+                            </div>
+                        ) : (
+                            /* ── Non-admin: read-only list ── */
+                            <ul className="space-y-1 ml-1">
+                                {missingClients.map(c => (
+                                    <li key={c} className="text-xs font-mono text-amber-900 bg-amber-100 rounded px-2 py-0.5 inline-block mr-1 mb-1">
+                                        {c}
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
                     </div>
                 )}
 

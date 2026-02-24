@@ -1,383 +1,408 @@
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
-from fastapi.responses import RedirectResponse
+﻿"""
+Email routes â€” fully stateless.
+
+All data is served from MongoDB (batches, clients) and Cloudinary (files).
+No local folders, no meta.json, no client_email_map.json are used.
+The system survives a Render redeploy without any data loss.
+
+Endpoints
+---------
+POST  /api/email/send-batch             â€” send MIS emails for a batch (primary)
+POST  /api/email/send-mis               â€” alias with file_type support (legacy callers)
+POST  /api/email/upload-custom          â€” upload custom Excel override to Cloudinary
+GET   /api/email/mis-preview/{batch_id} â€” list clients + Cloudinary URLs
+GET   /api/email/download/{batch_id}/{file_type}/{safe_name} â€” redirect to Cloudinary
+GET   /api/email/logs                   â€” email audit log from MongoDB
+"""
+
+from __future__ import annotations
+
 import os
-import json
 import shutil
 from datetime import datetime, timezone
-from app.services.file_service import load_batch_by_id, save_batch
-from app.services.email_service import AmazonSESEmailService
-from app.services.processing_service import send_client_mis_emails
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
+
+from app.auth.dependencies import require_read_access, require_write_access
+from app.models.schemas import MISEmailRequest
+from app.models.user_model import CurrentUser
 from app.services.batch_mongo_service import (
     get_batch_by_id,
-    update_client_custom_url,
-    update_client_status,
-    insert_email_log,
     get_all_email_logs,
+    insert_email_log,
+    update_client_custom_url,
+    update_client_email_result,
 )
-from app.models.schemas import EmailSendRequest, EmailPreviewRequest, MISEmailRequest
-from app.auth.dependencies import require_read_access, require_write_access
-from app.models.user_model import CurrentUser
+from app.services.email_service import send_mis_email
 
 router = APIRouter()
-email_service = AmazonSESEmailService()
-
-STORAGE_DIR = "app/storage/batches"
 
 
-@router.post("/send-mis")
-async def send_mis_emails(request: MISEmailRequest, current_user: CurrentUser = Depends(require_write_access)):
+# ---------------------------------------------------------------------------
+# Request schemas
+# ---------------------------------------------------------------------------
+
+class SendBatchRequest(BaseModel):
+    batch_id: str
+    clients:  Optional[List[str]] = None  # None â†’ all pending
+    limit:    Optional[int]       = None  # None â†’ no cap
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _resolve_file_url(client: dict, file_type: str) -> str | None:
     """
-    Phase-3: Send MIS Excel files to each client via AWS SES.
-    POST /api/email/send-mis
-    Body: { "batch_id": "...", "clients": [...], "limit": N, "file_type": "generated"|"custom" }
-
-    Reads from MongoDB if local batch folder is missing (full persistence support).
-    After sending, updates MongoDB client statuses and inserts email log entries.
+    Pick the Cloudinary URL for *client* based on *file_type*.
+    Always falls back to the other URL type if the preferred one is absent.
     """
-    batch_folder = os.path.join(STORAGE_DIR, request.batch_id)
+    if file_type == "custom":
+        return client.get("custom_file_url") or client.get("generated_file_url")
+    return client.get("generated_file_url") or client.get("custom_file_url")
 
-    # ── If local folder is gone, reconstruct minimal files from MongoDB ──────
-    if not os.path.exists(batch_folder):
-        batch_mongo = await get_batch_by_id(request.batch_id)
-        if not batch_mongo:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Batch '{request.batch_id}' not found.",
-            )
-        os.makedirs(batch_folder, exist_ok=True)
 
-        # Reconstruct meta.json
-        client_files = {
-            c["safe_name"]: {"url": c["generated_file_url"]}
-            for c in batch_mongo.get("clients", [])
-            if c.get("generated_file_url")
-        }
-        custom_files = {
-            c["safe_name"]: {"url": c["custom_file_url"]}
-            for c in batch_mongo.get("clients", [])
-            if c.get("custom_file_url")
-        }
-        meta = {
-            "batch_id": request.batch_id,
-            "client_files": client_files,
-            "custom_files": custom_files,
-        }
-        with open(os.path.join(batch_folder, "meta.json"), "w") as f:
-            json.dump(meta, f)
+def _filter_candidates(
+    all_clients: list[dict],
+    requested: list[str] | None,
+    limit: int | None,
+) -> list[dict]:
+    """Return pending clients filtered by optional name list and limit."""
+    candidates = [c for c in all_clients if c.get("status") == "pending"]
+    if requested:
+        upper = {n.strip().upper() for n in requested}
+        candidates = [c for c in candidates if c["client_name"].upper() in upper]
+    if limit and limit > 0:
+        candidates = candidates[:limit]
+    return candidates
 
-        # Reconstruct client_email_map.json
-        email_map = {
-            c["client_name"].upper(): c["email"]
-            for c in batch_mongo.get("clients", [])
-        }
-        with open(os.path.join(batch_folder, "client_email_map.json"), "w") as f:
-            json.dump(email_map, f)
 
-    result = send_client_mis_emails(
-        batch_folder=batch_folder,
-        clients=request.clients,
-        limit=request.limit,
-        file_type=request.file_type or "generated",
-    )
+async def _send_clients(
+    batch_id: str,
+    candidates: list[dict],
+    file_type: str,
+) -> dict:
+    """
+    Core email sending loop.
 
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result["message"])
+    For each candidate:
+      â€¢ Resolves Cloudinary URL (no local file read).
+      â€¢ Calls send_mis_email() â€” downloads file in-memory, sends via SES.
+      â€¢ Persists status to MongoDB (batch client + email_logs).
 
-    # ── Update MongoDB: client statuses + email logs ─────────────────────────
+    Returns a summary dict with sent / failed / skipped counts and per-client results.
+    """
+    sent_count    = 0
+    failed_count  = 0
+    skipped_count = 0
+    results: list[dict] = []
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    for entry in result.get("sent_clients", []):
-        try:
-            await update_client_status(request.batch_id, entry["safe_name"], "sent")
-            await insert_email_log({
-                "batch_id": request.batch_id,
-                "client_name": entry["client_name"],
-                "email": entry["email"],
-                "status": "sent",
-                "sent_at": now_iso,
-                "error": None,
-            })
-        except Exception as exc:
-            print(f"⚠️  MongoDB update failed for sent client '{entry['client_name']}': {exc}")
+    for client in candidates:
+        client_name = client["client_name"]
+        safe_name   = client.get("safe_name", client_name.replace(" ", "_"))
+        file_url    = _resolve_file_url(client, file_type)
 
-    for entry in result.get("failed_clients", []):
+        if not file_url:
+            reason = f"File URL missing for client '{client_name}'"
+            print(f"  â© Skipped {client_name}: {reason}")
+            skipped_count += 1
+            results.append({"client_name": client_name, "status": "skipped", "reason": reason})
+            continue
+
+        result     = await send_mis_email(batch_id=batch_id, client_name=client_name, file_url=file_url)
+        status     = result["status"]
+        email_addr = result.get("email", "")
+        message_id = result.get("message_id")
+        error      = result.get("error")
+
+        if status == "sent":
+            sent_count += 1
+        else:
+            failed_count += 1
+
         try:
-            await update_client_status(request.batch_id, entry["safe_name"], "failed")
+            await update_client_email_result(
+                batch_id=batch_id, safe_name=safe_name, status=status, sent_at=now_iso,
+            )
+        except Exception as exc:
+            print(f"  âš ï¸  Batch status update failed for '{client_name}': {exc}")
+
+        try:
             await insert_email_log({
-                "batch_id": request.batch_id,
-                "client_name": entry["client_name"],
-                "email": entry["email"],
-                "status": "failed",
-                "sent_at": now_iso,
-                "error": entry.get("reason"),
+                "batch_id": batch_id, "client_name": client_name,
+                "email": email_addr, "status": status,
+                "message_id": message_id, "error": error, "sent_at": now_iso,
             })
         except Exception as exc:
-            print(f"⚠️  MongoDB update failed for failed client '{entry['client_name']}': {exc}")
+            print(f"  âš ï¸  Email log insert failed for '{client_name}': {exc}")
+
+        results.append({
+            "client_name": client_name, "email": email_addr,
+            "status": status, "message_id": message_id, "error": error,
+        })
 
     return {
-        "message": "MIS emails sent",
-        "total_sent": result["total_sent"],
-        "failed": result["failed"],
-        "errors": result["errors"],
+        "sent": sent_count, "failed": failed_count,
+        "skipped": skipped_count, "total": len(candidates), "results": results,
     }
 
-@router.post("/send")
-async def send_emails(request: EmailSendRequest, current_user: CurrentUser = Depends(require_write_access)):
-    """Send emails in controlled batches (1, 5, 10, 20, 50, custom)"""
-    try:
-        batch_data = load_batch_by_id(request.batch_id)
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
-    try:
-        stats = email_service.send_batch_emails(batch_data, limit=request.limit)
-        save_batch(batch_data)
-        return stats
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Email sending failed: {str(e)}")
 
-@router.post("/preview")
-async def preview_email(request: EmailPreviewRequest, current_user: CurrentUser = Depends(require_read_access)):
-    """Preview email content for a specific row"""
-    try:
-        batch_data = load_batch_by_id(request.batch_id)
-        rows = batch_data.get("rows", [])
-        
-        row = next(
-            (r for r in rows if r.get("row_id") == request.row_id),
-            None
+
+
+# ---------------------------------------------------------------------------
+# POST /api/email/send-batch  (primary)
+# ---------------------------------------------------------------------------
+
+@router.post("/send-batch")
+async def send_batch_mis_emails(
+    request: SendBatchRequest,
+    current_user: CurrentUser = Depends(require_write_access),
+):
+    """
+    Send MIS Excel reports to clients for a given batch.
+
+    Body:
+        {
+            "batch_id": "batch_20260223_120000",
+            "clients":  ["AJANTA PHARMA"],   // optional â€” omit for all pending
+            "limit":    10                   // optional â€” omit for no cap
+        }
+
+    Uses generated_file_url preferentially; falls back to custom automatically.
+    """
+    batch = await get_batch_by_id(request.batch_id)
+    if not batch:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Batch '{request.batch_id}' not found in database.",
         )
-        
-        if not row:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"Row {request.row_id} not found in batch {request.batch_id}"
-            )
-        
-        enriched_data = email_service.enrich_data(row)
-        html_body = email_service.build_shipment_email(enriched_data)
-        subject = "Shipment Update – Kiirusxpress"
-        
-        return {
-            "subject": subject,
-            "html": html_body,
-            "customer_name": row.get("customer_name"),
-            "customer_email": row.get("customer_email"),
-            "row_id": row.get("row_id")
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Preview generation failed: {str(e)}")
 
-@router.get("/preview-first/{batch_id}")
-async def preview_first_email(batch_id: str, current_user: CurrentUser = Depends(require_read_access)):
-    """Preview the first email in a batch"""
-    try:
-        batch_data = load_batch_by_id(batch_id)
-        rows = batch_data.get("rows", [])
-        
-        if not rows:
-            raise HTTPException(status_code=404, detail="No rows found in this batch")
-        
-        first_row = rows[0]
-        enriched_data = email_service.enrich_data(first_row)
-        html_body = email_service.build_shipment_email(enriched_data)
-        subject = "Shipment Update – Kiirusxpress"
-        
+    all_clients: list[dict] = batch.get("clients", [])
+    if not all_clients:
+        raise HTTPException(status_code=400, detail="Batch has no clients.")
+
+    candidates = _filter_candidates(all_clients, request.clients, request.limit)
+    if not candidates:
         return {
-            "subject": subject,
-            "html": html_body,
-            "customer_name": first_row.get("customer_name"),
-            "customer_email": first_row.get("customer_email"),
-            "row_id": first_row.get("row_id")
+            "batch_id": request.batch_id,
+            "message":  "No pending clients to send to.",
+            "sent": 0, "failed": 0, "skipped": 0, "total": 0, "results": [],
         }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Preview generation failed: {str(e)}")
+
+    print(f"\nðŸ“§ send-batch: batch={request.batch_id} | candidates={len(candidates)}")
+    summary = await _send_clients(request.batch_id, candidates, file_type="generated")
+    print(
+        f"âœ… send-batch complete â€” "
+        f"Sent: {summary['sent']} | Failed: {summary['failed']} | "
+        f"Skipped: {summary['skipped']} | Total: {summary['total']}\n"
+    )
+    return {"batch_id": request.batch_id, **summary}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/email/send-mis  (alias â€” supports file_type param)
+# ---------------------------------------------------------------------------
+
+@router.post("/send-mis")
+async def send_mis_emails(
+    request: MISEmailRequest,
+    current_user: CurrentUser = Depends(require_write_access),
+):
+    """
+    Send MIS Excel files to each client via AWS SES.
+
+    Body: { "batch_id": "...", "clients": [...], "limit": N, "file_type": "generated"|"custom" }
+
+    Fully MongoDB-driven â€” no local files required.
+    """
+    batch = await get_batch_by_id(request.batch_id)
+    if not batch:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Batch '{request.batch_id}' not found in database.",
+        )
+
+    all_clients: list[dict] = batch.get("clients", [])
+    if not all_clients:
+        raise HTTPException(status_code=400, detail="Batch has no clients.")
+
+    candidates = _filter_candidates(all_clients, request.clients, request.limit)
+    if not candidates:
+        return {"message": "No pending clients to send to.", "total_sent": 0, "failed": 0, "errors": []}
+
+    file_type = (request.file_type or "generated").lower()
+    summary   = await _send_clients(request.batch_id, candidates, file_type)
+
+    errors = [
+        {"client": r["client_name"], "reason": r.get("error") or r.get("reason", "")}
+        for r in summary["results"]
+        if r["status"] in ("failed", "skipped")
+    ]
+    return {"message": "MIS emails sent", "total_sent": summary["sent"], "failed": summary["failed"], "errors": errors}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/email/logs
+# ---------------------------------------------------------------------------
 
 @router.get("/logs")
 async def get_email_logs(current_user: CurrentUser = Depends(require_read_access)):
-    """Get email sending logs — reads from MongoDB (persistent)."""
+    """Email audit log â€” served from MongoDB email_logs collection."""
     try:
-        logs = await get_all_email_logs()
-        return logs
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load email logs: {e}")
+        return await get_all_email_logs()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load email logs: {exc}")
 
+
+# ---------------------------------------------------------------------------
+# POST /api/email/upload-custom
+# ---------------------------------------------------------------------------
 
 @router.post("/upload-custom")
 async def upload_custom_file(
-    batch_id: str = Form(...),
-    client_name: str = Form(...),
-    file: UploadFile = File(...),
+    batch_id:    str        = Form(...),
+    client_name: str        = Form(...),
+    file:        UploadFile = File(...),
     current_user: CurrentUser = Depends(require_write_access),
 ):
-    """Upload a custom Excel attachment for a specific client to Cloudinary."""
-    batch_folder = os.path.join(STORAGE_DIR, batch_id)
+    """
+    Upload a custom Excel attachment for a specific client.
 
-    # Accept if either local folder OR MongoDB record exists
-    batch_mongo = await get_batch_by_id(batch_id)
-    if not os.path.exists(batch_folder) and not batch_mongo:
-        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
+    Flow: uploaded file â†’ /tmp â†’ Cloudinary â†’ MongoDB (custom_file_url).
+    Temp file is deleted immediately after the Cloudinary upload.
+    No permanent local storage is used.
+    """
+    batch = await get_batch_by_id(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found in database.")
 
-    if not file.filename.endswith(".xlsx"):
+    if not (file.filename or "").endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Only .xlsx files are accepted.")
 
-    safe_name = client_name.strip().replace(" ", "_").replace("/", "").replace("\\", "")
+    safe_name = (
+        client_name.strip()
+        .replace(" ", "_")
+        .replace("/", "")
+        .replace("\\", "")
+    )
 
-    # Save to tmp
-    tmp_dir = os.path.join("app", "storage", "tmp", batch_id)
-    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_dir  = os.path.join("app", "storage", "tmp", batch_id)
     tmp_path = os.path.join(tmp_dir, f"{safe_name}.xlsx")
+    os.makedirs(tmp_dir, exist_ok=True)
 
-    with open(tmp_path, "wb") as out:
-        shutil.copyfileobj(file.file, out)
-
-    # Upload to Cloudinary
-    cloud_info: dict = {}
     try:
+        with open(tmp_path, "wb") as out:
+            shutil.copyfileobj(file.file, out)
         from app.utils.cloudinary_service import upload_excel
-        cloud_info = upload_excel(tmp_path, batch_id, "custom_files", safe_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {e}")
+        cloud_info: dict = upload_excel(tmp_path, batch_id, "custom_files", safe_name)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {exc}")
     finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
         try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
             if os.path.exists(tmp_dir) and not os.listdir(tmp_dir):
                 os.rmdir(tmp_dir)
         except Exception:
             pass
 
-    # Update meta.json with the custom file URL (local cache)
-    meta_path = os.path.join(batch_folder, "meta.json")
-    if os.path.exists(meta_path):
-        try:
-            with open(meta_path, "r") as f:
-                meta = json.load(f)
-            meta.setdefault("custom_files", {})[safe_name] = cloud_info
-            with open(meta_path, "w") as f:
-                json.dump(meta, f, indent=2)
-        except Exception as e:
-            print(f"⚠️  Failed to update meta.json: {e}")
-
-    # Update MongoDB (persistent)
     try:
         await update_client_custom_url(
             batch_id=batch_id,
             safe_name=safe_name,
             custom_file_url=cloud_info.get("url", ""),
         )
-    except Exception as e:
-        print(f"⚠️  MongoDB custom_file_url update failed: {e}")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cloudinary upload succeeded but MongoDB update failed: {exc}",
+        )
 
     return {
-        "message": f"Custom file uploaded to Cloudinary for '{client_name}'",
+        "message":  f"Custom file uploaded to Cloudinary for '{client_name}'",
         "filename": f"{safe_name}.xlsx",
-        "url": cloud_info.get("url"),
+        "url":      cloud_info.get("url"),
     }
 
 
+# ---------------------------------------------------------------------------
+# GET /api/email/mis-preview/{batch_id}
+# ---------------------------------------------------------------------------
+
 @router.get("/mis-preview/{batch_id}")
-async def get_mis_clients(batch_id: str, current_user: CurrentUser = Depends(require_read_access)):
-    """Return list of clients with Cloudinary URLs. Prefers MongoDB; falls back to meta.json."""
+async def get_mis_clients(
+    batch_id: str,
+    current_user: CurrentUser = Depends(require_read_access),
+):
+    """
+    Return list of clients with Cloudinary URLs for a batch.
+    Served entirely from MongoDB â€” no local files.
+    """
+    batch = await get_batch_by_id(batch_id)
+    if not batch:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Batch '{batch_id}' not found in database.",
+        )
 
-    # ── MongoDB path ─────────────────────────────────────────────────────────
-    batch_mongo = await get_batch_by_id(batch_id)
-    if batch_mongo and batch_mongo.get("clients"):
-        clients = []
-        for c in batch_mongo["clients"]:
-            safe = c.get("safe_name", c["client_name"].replace(" ", "_"))
-            clients.append({
-                "client_name": c["client_name"],
-                "safe_name": safe,
-                "generated_file": f"{safe}.xlsx",
-                "generated_url": c.get("generated_file_url"),
-                "custom_file_exists": bool(c.get("custom_file_url")),
-                "custom_url": c.get("custom_file_url"),
-                "recipient_email": c.get("email", ""),
-                "status": c.get("status", "pending"),
-            })
-        return {"batch_id": batch_id, "clients": clients}
-
-    # ── Legacy fallback: local meta.json ─────────────────────────────────────
-    batch_folder = os.path.join(STORAGE_DIR, batch_id)
-    if not os.path.exists(batch_folder):
-        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
-
-    meta_path = os.path.join(batch_folder, "meta.json")
-    if not os.path.exists(meta_path):
-        raise HTTPException(status_code=404, detail="meta.json not found for this batch.")
-
-    try:
-        with open(meta_path, "r") as f:
-            meta = json.load(f)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cannot read meta.json: {e}")
-
-    cloud_generated: dict = meta.get("client_files", {})
-    cloud_custom: dict = meta.get("custom_files", {})
-
-    email_map: dict = {}
-    map_path = os.path.join(batch_folder, "client_email_map.json")
-    if os.path.exists(map_path):
-        try:
-            with open(map_path, "r") as f:
-                email_map = json.load(f)
-        except Exception:
-            pass
+    raw_clients: list[dict] = batch.get("clients", [])
+    if not raw_clients:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' has no clients.")
 
     clients = []
-    for safe_name in sorted(cloud_generated.keys()):
-        display_name = safe_name.replace("_", " ").strip()
-        custom_exists = safe_name in cloud_custom
-        recipient = email_map.get(display_name) or email_map.get(display_name.upper()) or ""
+    for c in raw_clients:
+        safe = c.get("safe_name", c["client_name"].replace(" ", "_"))
         clients.append({
-            "client_name": display_name,
-            "safe_name": safe_name,
-            "generated_file": f"{safe_name}.xlsx",
-            "generated_url": cloud_generated[safe_name].get("url"),
-            "custom_file_exists": custom_exists,
-            "custom_url": cloud_custom[safe_name].get("url") if custom_exists else None,
-            "recipient_email": recipient,
-            "status": "pending",
+            "client_name":        c["client_name"],
+            "safe_name":          safe,
+            "generated_file":     f"{safe}.xlsx",
+            "generated_url":      c.get("generated_file_url"),
+            "custom_file_exists": bool(c.get("custom_file_url")),
+            "custom_url":         c.get("custom_file_url"),
+            "recipient_email":    c.get("email", ""),
+            "status":             c.get("status", "pending"),
         })
 
     return {"batch_id": batch_id, "clients": clients}
 
 
+# ---------------------------------------------------------------------------
+# GET /api/email/download/{batch_id}/{file_type}/{client_safe_name}
+# ---------------------------------------------------------------------------
+
 @router.get("/download/{batch_id}/{file_type}/{client_safe_name}")
 async def download_client_file(
-    batch_id: str,
-    file_type: str,
+    batch_id:         str,
+    file_type:        str,
     client_safe_name: str,
     current_user: CurrentUser = Depends(require_read_access),
 ):
-    """Redirect to Cloudinary URL for generated or custom Excel file."""
-    batch_folder = os.path.join(STORAGE_DIR, batch_id)
-    meta_path = os.path.join(batch_folder, "meta.json")
+    """
+    Redirect to Cloudinary URL for a generated or custom Excel file.
+    Served entirely from MongoDB â€” no local files.
+    """
+    batch = await get_batch_by_id(batch_id)
+    if not batch:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Batch '{batch_id}' not found in database.",
+        )
 
-    if not os.path.exists(meta_path):
-        raise HTTPException(status_code=404, detail="Batch metadata not found.")
+    for c in batch.get("clients", []):
+        if c.get("safe_name") == client_safe_name:
+            url = _resolve_file_url(c, file_type)
+            if url:
+                return RedirectResponse(url=url, status_code=302)
+            raise HTTPException(
+                status_code=404,
+                detail=f"File URL missing for client '{client_safe_name}'.",
+            )
 
-    try:
-        with open(meta_path, "r") as f:
-            meta = json.load(f)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cannot read meta.json: {e}")
-
-    if file_type == "custom":
-        entry = meta.get("custom_files", {}).get(client_safe_name)
-    else:
-        entry = meta.get("client_files", {}).get(client_safe_name)
-
-    if not entry or not entry.get("url"):
-        raise HTTPException(status_code=404, detail="File not found in Cloudinary.")
-
-    return RedirectResponse(url=entry["url"], status_code=302)
+    raise HTTPException(
+        status_code=404,
+        detail=f"Client '{client_safe_name}' not found in batch '{batch_id}'.",
+    )

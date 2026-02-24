@@ -78,6 +78,26 @@ export const deleteUser = async (email) => {
 };
 
 // ---------------------------------------------------------------------------
+// Admin — Client emails
+// ---------------------------------------------------------------------------
+export const getAdminClients = async ({ page = 1, limit = 500, search = '' } = {}) => {
+    const params = new URLSearchParams({ page, limit });
+    if (search) params.set('search', search);
+    const response = await api.get(`/admin/clients?${params}`);
+    return response.data;
+};
+
+export const upsertAdminClient = async ({ client_name, email }) => {
+    const response = await api.post('/admin/clients', { client_name, email });
+    return response.data;
+};
+
+export const deleteAdminClient = async (client_name) => {
+    const response = await api.delete(`/admin/clients/${encodeURIComponent(client_name)}`);
+    return response.data;
+};
+
+// ---------------------------------------------------------------------------
 // Upload
 // ---------------------------------------------------------------------------
 export const uploadMasterAndEmail = async (masterFile, emailFile) => {
