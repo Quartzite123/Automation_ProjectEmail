@@ -99,12 +99,17 @@ async def send_mis_email(
 <!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"></head>
-<body style="font-family: Arial, sans-serif; color: #333;">
+<body style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
   <p>Dear Customer,</p>
   <p>Please find attached your MIS report for <strong>{client_name}</strong>.</p>
+  <p>For any assistance, please contact:</p>
   <p>
-    If you have any questions, please reach out at
-    <a href="mailto:{settings.SUPPORT_EMAIL}">{settings.SUPPORT_EMAIL}</a>.
+    <b>Shipment Related Query:</b> {settings.SHIPMENT_QUERY_PHONE}<br>
+    <b>Pickup Related Query:</b> {settings.PICKUP_QUERY_PHONE}
+  </p>
+  <p>
+    Or email us at:<br>
+    <a href="mailto:{settings.SUPPORT_EMAIL}" style="color:#ef4444;">{settings.SUPPORT_EMAIL}</a>
   </p>
   <br>
   <p>Regards,<br><strong>Kiirus Xpress</strong></p>

@@ -35,3 +35,7 @@ MIS_CC_EMAILS: list[str] = [
 
 # Support contact shown in outbound MIS emails
 SUPPORT_EMAIL: str = os.getenv("SUPPORT_EMAIL", "customer.support@kiirusxpress.com")
+
+# Support phone numbers shown in outbound MIS emails
+SHIPMENT_QUERY_PHONE: str = os.getenv("SHIPMENT_QUERY_PHONE", "9921002224")
+PICKUP_QUERY_PHONE: str = os.getenv("PICKUP_QUERY_PHONE", "9921002229")
