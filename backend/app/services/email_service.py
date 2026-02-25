@@ -99,17 +99,17 @@ async def send_mis_email(
 <!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:0;background:#F4F7FA;font-family:Arial,Helvetica,sans-serif;">
+<body style="margin:0;padding:0;background:#F5F5F5;font-family:Arial,Helvetica,sans-serif;">
 
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#F4F7FA;padding:20px;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#F5F5F5;padding:20px;">
 <tr><td align="center">
 
 <table width="600" cellpadding="0" cellspacing="0"
-       style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,0.08);">
+       style="background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
 
   <!-- Header -->
   <tr>
-    <td style="background:#0B3C5D;color:#ffffff;padding:16px 24px;font-size:20px;font-weight:bold;">
+    <td style="background:#000000;color:#FFD400;padding:16px 24px;font-size:20px;font-weight:bold;">
       Kiirus Xpress
     </td>
   </tr>
@@ -121,18 +121,37 @@ async def send_mis_email(
       <p style="margin:0 0 12px;">Dear Customer,</p>
 
       <p style="margin:0 0 12px;">
-        Please find attached your MIS report for
-        <strong style="color:#0B3C5D;">{client_name}</strong>.
+        Please find your MIS report for
+        <strong style="color:#000000;">{client_name}</strong>.
       </p>
 
-      <div style="background:#E8F1F5;padding:14px;border-radius:6px;margin:18px 0;font-size:14px;line-height:1.8;">
-        <strong>For any assistance:</strong><br><br>
-        <b>Shipment Related Query:</b> {settings.SHIPMENT_QUERY_PHONE}<br>
-        <b>Pickup Related Query:</b> {settings.PICKUP_QUERY_PHONE}<br><br>
-        <b>Email:</b>
-        <a href="mailto:{settings.SUPPORT_EMAIL}"
-           style="color:#1D7A85;text-decoration:none;">{settings.SUPPORT_EMAIL}</a>
-      </div>
+      <!-- Attachment Box -->
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="margin:20px 0;border:1px solid #FFD400;border-radius:6px;">
+        <tr>
+          <td style="background:#FFF8CC;padding:14px;">
+            <strong style="color:#000000;">&#128206; Attached File</strong><br>
+            <span style="color:#555555;font-size:13px;">
+              Your MIS Excel report is attached with this email.
+            </span>
+          </td>
+        </tr>
+      </table>
+
+      <!-- Support Box -->
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="margin:18px 0;background:#f2f2f2;border-radius:6px;">
+        <tr>
+          <td style="padding:14px;font-size:14px;line-height:1.8;">
+            <strong>For any assistance:</strong><br><br>
+            <b>Shipment Related Query:</b> {settings.SHIPMENT_QUERY_PHONE}<br>
+            <b>Pickup Related Query:</b> {settings.PICKUP_QUERY_PHONE}<br><br>
+            <b>Email:</b>
+            <a href="mailto:{settings.SUPPORT_EMAIL}"
+               style="color:#000000;font-weight:bold;text-decoration:none;">{settings.SUPPORT_EMAIL}</a>
+          </td>
+        </tr>
+      </table>
 
       <p style="margin:0;">
         Regards,<br>
@@ -144,7 +163,7 @@ async def send_mis_email(
 
   <!-- Footer -->
   <tr>
-    <td style="background:#F0F3F6;color:#777777;padding:12px 24px;font-size:12px;text-align:center;">
+    <td style="background:#000000;color:#FFD400;padding:12px 24px;font-size:12px;text-align:center;">
       This is an automated email. Please do not reply directly.
     </td>
   </tr>
