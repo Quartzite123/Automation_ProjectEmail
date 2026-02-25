@@ -128,15 +128,15 @@ async def send_mis_email(
 
       <!-- File Card -->
       <table width="100%" cellpadding="0" cellspacing="0"
-             style="margin:20px 0;background:#0F0F0F;border:1px solid #2A2A2A;border-radius:8px;">
+             style="margin:20px 0;background:#FFF8CC;border:1px solid #E6B800;border-radius:8px;">
         <tr>
           <td style="padding:16px;">
-            <div style="color:#E6B800;font-weight:bold;margin-bottom:6px;">
-              &#128206; MIS Report (Excel)
+            <div style="color:#000000;font-weight:bold;margin-bottom:6px;">
+              Attached File
             </div>
-            <div style="color:#BBBBBB;font-size:13px;">
-              Your MIS Excel report is attached with this email.<br>
-              Please download it from the attachment section of your email client.
+            <div style="color:#333333;font-size:13px;">
+              Your MIS Excel report is attached with this email.
+              Please download it from the attachment section of your email.
             </div>
           </td>
         </tr>
