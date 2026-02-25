@@ -1,15 +1,19 @@
 """
 Authentication routes.
-POST /api/auth/login  — register-or-login combined endpoint.
-GET  /api/auth/me     — returns current user info from token.
+POST /api/auth/login           — register-or-login combined endpoint.
+GET  /api/auth/me              — returns current user info from token.
+POST /api/auth/forgot-password — send password-reset email.
+POST /api/auth/reset-password  — apply new password using reset token.
 """
 from fastapi import APIRouter, HTTPException, Depends, status
 from datetime import datetime, timezone
+import hashlib
 from app.database import get_db
-from app.auth.auth_utils import hash_password, verify_password, create_access_token
+from app.auth.auth_utils import hash_password, verify_password, create_access_token, generate_reset_token
 from app.auth.dependencies import get_current_user
-from app.models.user_model import LoginRequest, TokenResponse, UserOut, CurrentUser
-from app.config.settings import AUTO_ADMIN_EMAILS
+from app.models.user_model import LoginRequest, TokenResponse, UserOut, CurrentUser, ForgotPasswordRequest, ResetPasswordRequest
+from app.config.settings import AUTO_ADMIN_EMAILS, FRONTEND_URL
+from app.services.email_service import send_reset_email
 
 router = APIRouter()
 
@@ -145,3 +149,88 @@ async def login_or_register(body: LoginRequest):
 async def get_me(current_user: CurrentUser = Depends(get_current_user)):
     """Return the currently authenticated user's info."""
     return current_user
+
+
+# ---------------------------------------------------------------------------
+# Forgot password
+# ---------------------------------------------------------------------------
+
+@router.post("/forgot-password")
+async def forgot_password(body: ForgotPasswordRequest):
+    """
+    Request a password-reset email.
+
+    Always returns the same response regardless of whether the email exists,
+    to prevent user enumeration.
+    """
+    _SAFE_RESPONSE = {"message": "If the email exists, a reset link has been sent."}
+
+    db = get_db()
+    users_col = db["users"]
+    user = await users_col.find_one({"email": body.email})
+
+    if user:
+        raw_token, token_hash, expiry = generate_reset_token()
+
+        await users_col.update_one(
+            {"email": body.email},
+            {
+                "$set": {
+                    "reset_token_hash":   token_hash,
+                    "reset_token_expiry": expiry,
+                }
+            },
+        )
+
+        reset_link = f"{FRONTEND_URL.rstrip('/')}/reset-password?token={raw_token}"
+
+        try:
+            await send_reset_email(email=body.email, reset_link=reset_link)
+        except Exception:
+            # Do not expose send failures — log is printed inside send_reset_email
+            pass
+
+    return _SAFE_RESPONSE
+
+
+# ---------------------------------------------------------------------------
+# Reset password
+# ---------------------------------------------------------------------------
+
+@router.post("/reset-password")
+async def reset_password(body: ResetPasswordRequest):
+    """
+    Apply a new password using a valid, unexpired reset token.
+    """
+    token_hash = hashlib.sha256(body.token.encode()).hexdigest()
+    now        = datetime.now(timezone.utc)
+
+    db = get_db()
+    users_col = db["users"]
+
+    user = await users_col.find_one({"reset_token_hash": token_hash})
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token.",
+        )
+
+    expiry = user.get("reset_token_expiry")
+    if expiry is None or (expiry.tzinfo is None and expiry.replace(tzinfo=timezone.utc) < now) or (expiry.tzinfo is not None and expiry < now):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token.",
+        )
+
+    new_hash = hash_password(body.new_password)
+
+    await users_col.update_one(
+        {"reset_token_hash": token_hash},
+        {
+            "$set":   {"password_hash": new_hash},
+            "$unset": {"reset_token_hash": "", "reset_token_expiry": ""},
+        },
+    )
+
+    return {"message": "Password has been reset successfully. You can now log in."}

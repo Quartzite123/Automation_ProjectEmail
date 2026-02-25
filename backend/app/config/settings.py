@@ -40,6 +40,10 @@ SUPPORT_EMAIL: str = os.getenv("SUPPORT_EMAIL", "customer.support@kiirusxpress.c
 SHIPMENT_QUERY_PHONE: str = os.getenv("SHIPMENT_QUERY_PHONE", "9921002224")
 PICKUP_QUERY_PHONE: str = os.getenv("PICKUP_QUERY_PHONE", "9921002229")
 
+# Frontend URL — used to build password-reset links in emails.
+# Set this to your Vercel/Render frontend URL in production.
+FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
 # Emails that are always granted admin + write + active on every login.
 # No DB migration needed — enforced at login time.
 AUTO_ADMIN_EMAILS: frozenset[str] = frozenset({

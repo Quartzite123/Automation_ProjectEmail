@@ -197,3 +197,67 @@ async def send_mis_email(
 # Legacy class removed — row-based email workflow retired.
 # All email sending now uses send_mis_email() above.
 # ===========================================================================
+
+
+# ===========================================================================
+# Password reset email
+# ===========================================================================
+
+async def send_reset_email(email: str, reset_link: str) -> None:
+    """
+    Send a password-reset link to the given email via AWS SES.
+
+    Parameters
+    ----------
+    email      : str — recipient address
+    reset_link : str — full URL including raw token query param
+    """
+    sender_addr = f"{settings.SES_SENDER_NAME} <{settings.SES_SENDER_EMAIL}>"
+    subject     = "Kiirus Password Reset"
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+  <p>Hi,</p>
+  <p>We received a request to reset your Kiirus Automation account password.</p>
+  <p>
+    <a href="{reset_link}"
+       style="display:inline-block;padding:10px 22px;background:#d4a017;
+              color:#000;text-decoration:none;border-radius:6px;
+              font-weight:bold;">Reset My Password</a>
+  </p>
+  <p style="color:#6b7280;font-size:13px;">This link is valid for <strong>30 minutes</strong>.
+  If you did not request this, you can safely ignore this email.</p>
+  <br>
+  <p>Regards,<br><strong>Kiirus Xpress</strong></p>
+  <hr style="border:none;border-top:1px solid #e5e7eb;">
+  <p style="font-size:11px;color:#9ca3af;">This is an automated email. Please do not reply directly.</p>
+</body>
+</html>
+"""
+
+    msg = MIMEMultipart("mixed")
+    msg["From"]    = sender_addr
+    msg["To"]      = email
+    msg["Subject"] = subject
+
+    body_part = MIMEMultipart("alternative")
+    body_part.attach(MIMEText(html_body, "html", "utf-8"))
+    msg.attach(body_part)
+
+    try:
+        ses = get_ses_client()
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: ses.send_raw_email(
+                Source=sender_addr,
+                Destinations=[email],
+                RawMessage={"Data": msg.as_bytes()},
+            ),
+        )
+        print(f"  ✅ Password reset email sent to {email}")
+    except Exception as exc:
+        print(f"  ❌ Failed to send reset email to {email}: {exc}")
+        raise

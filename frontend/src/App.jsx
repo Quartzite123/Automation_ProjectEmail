@@ -12,6 +12,8 @@ import EmailPage from './pages/EmailPage';
 import EmailLogs from './pages/EmailLogs';
 import AdminPage from './pages/AdminPage';
 import ClientEmailsPage from './pages/ClientEmailsPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
 
 function App() {
   return (
@@ -21,6 +23,8 @@ function App() {
           {/* Public */}
           <Route path="/login" element={<LoginPage />} />
           <Route path="/pending" element={<PendingPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
 
           {/* Protected — all logged-in users */}
           <Route

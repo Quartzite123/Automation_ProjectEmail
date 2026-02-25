@@ -168,6 +168,16 @@ export default function LoginPage() {
                             </button>
                         </form>
 
+                        {/* Forgot password */}
+                        <div className="text-center mt-4">
+                            <a
+                                href="/forgot-password"
+                                className="text-xs text-[#d4a017] hover:text-[#f2c94c] transition-colors"
+                            >
+                                Forgot password?
+                            </a>
+                        </div>
+
                         {/* Note */}
                         <p className="text-xs text-gray-600 text-center mt-6 leading-relaxed">
                             New accounts require admin approval before access is granted.
