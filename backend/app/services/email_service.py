@@ -181,10 +181,6 @@ async def send_mis_email(
 </html>
 """
 
-</body>
-</html>
-"""
-
     msg = MIMEMultipart("mixed")
     msg["From"]    = sender_addr
     msg["To"]      = ", ".join(emails)
@@ -275,8 +271,8 @@ async def send_reset_email(email: str, reset_link: str) -> None:
 
     Parameters
     ----------
-    email      : str — recipient address
-    reset_link : str — full URL including raw token query param
+    email      : str - recipient address
+    reset_link : str - full URL including raw token query param
     """
     sender_addr = f"{settings.SES_SENDER_NAME} <{settings.SES_SENDER_EMAIL}>"
     subject     = "Kiirus Password Reset"

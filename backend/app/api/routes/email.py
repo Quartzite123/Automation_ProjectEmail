@@ -1,5 +1,5 @@
 ﻿"""
-Email routes â€” fully stateless.
+Email routes - fully stateless.
 
 All data is served from MongoDB (batches, clients) and Cloudinary (files).
 No local folders, no meta.json, no client_email_map.json are used.
@@ -7,12 +7,12 @@ The system survives a Render redeploy without any data loss.
 
 Endpoints
 ---------
-POST  /api/email/send-batch             â€” send MIS emails for a batch (primary)
-POST  /api/email/send-mis               â€” alias with file_type support (legacy callers)
-POST  /api/email/upload-custom          â€” upload custom Excel override to Cloudinary
-GET   /api/email/mis-preview/{batch_id} â€” list clients + Cloudinary URLs
-GET   /api/email/download/{batch_id}/{file_type}/{safe_name} â€” redirect to Cloudinary
-GET   /api/email/logs                   â€” email audit log from MongoDB
+POST  /api/email/send-batch             - send MIS emails for a batch (primary)
+POST  /api/email/send-mis               - alias with file_type support (legacy callers)
+POST  /api/email/upload-custom          - upload custom Excel override to Cloudinary
+GET   /api/email/mis-preview/{batch_id} - list clients + Cloudinary URLs
+GET   /api/email/download/{batch_id}/{file_type}/{safe_name} - redirect to Cloudinary
+GET   /api/email/logs                   - email audit log from MongoDB
 """
 
 from __future__ import annotations
@@ -48,8 +48,8 @@ router = APIRouter()
 
 class SendBatchRequest(BaseModel):
     batch_id: str
-    clients:  Optional[List[str]] = None  # None â†’ all pending
-    limit:    Optional[int]       = None  # None â†’ no cap
+    clients:  Optional[List[str]] = None  # None -> all pending
+    limit:    Optional[int]       = None  # None -> no cap
 
 class RetryClientRequest(BaseModel):
     batch_id:    str
@@ -93,9 +93,9 @@ async def _send_clients(
     Core email sending loop.
 
     For each candidate:
-      â€¢ Resolves Cloudinary URL (no local file read).
-      â€¢ Calls send_mis_email() â€” downloads file in-memory, sends via SES.
-      â€¢ Persists status to MongoDB (batch client + email_logs).
+      * Resolves Cloudinary URL (no local file read).
+      * Calls send_mis_email() - downloads file in-memory, sends via SES.
+      * Persists status to MongoDB (batch client + email_logs).
 
     Returns a summary dict with sent / failed / skipped counts and per-client results.
     """
@@ -172,8 +172,8 @@ async def send_batch_mis_emails(
     Body:
         {
             "batch_id": "batch_20260223_120000",
-            "clients":  ["AJANTA PHARMA"],   // optional â€” omit for all pending
-            "limit":    10                   // optional â€” omit for no cap
+            "clients":  ["AJANTA PHARMA"],   // optional - omit for all pending
+            "limit":    10                   // optional - omit for no cap
         }
 
     Uses generated_file_url preferentially; falls back to custom automatically.
@@ -197,10 +197,10 @@ async def send_batch_mis_emails(
             "sent": 0, "failed": 0, "skipped": 0, "total": 0, "results": [],
         }
 
-    print(f"\nðŸ“§ send-batch: batch={request.batch_id} | candidates={len(candidates)}")
+    print(f"\nsend-batch: batch={request.batch_id} | candidates={len(candidates)}")
     summary = await _send_clients(request.batch_id, candidates, file_type="generated")
     print(
-        f"âœ… send-batch complete â€” "
+        f"send-batch complete - "
         f"Sent: {summary['sent']} | Failed: {summary['failed']} | "
         f"Skipped: {summary['skipped']} | Total: {summary['total']}\n"
     )
@@ -208,7 +208,7 @@ async def send_batch_mis_emails(
 
 
 # ---------------------------------------------------------------------------
-# POST /api/email/send-mis  (alias â€” supports file_type param)
+# POST /api/email/send-mis  (alias - supports file_type param)
 # ---------------------------------------------------------------------------
 
 @router.post("/send-mis")
@@ -221,7 +221,7 @@ async def send_mis_emails(
 
     Body: { "batch_id": "...", "clients": [...], "limit": N, "file_type": "generated"|"custom" }
 
-    Fully MongoDB-driven â€” no local files required.
+    Fully MongoDB-driven - no local files required.
     """
     batch = await get_batch_by_id(request.batch_id)
     if not batch:
@@ -255,7 +255,7 @@ async def send_mis_emails(
 
 @router.get("/logs")
 async def get_email_logs(current_user: CurrentUser = Depends(require_read_access)):
-    """Email audit log â€” served from MongoDB email_logs collection."""
+    """Email audit log - served from MongoDB email_logs collection."""
     try:
         return await get_all_email_logs()
     except Exception as exc:
@@ -276,7 +276,7 @@ async def upload_custom_file(
     """
     Upload a custom Excel attachment for a specific client.
 
-    Flow: uploaded file â†’ /tmp â†’ Cloudinary â†’ MongoDB (custom_file_url).
+    Flow: uploaded file -> /tmp -> Cloudinary -> MongoDB (custom_file_url).
     Temp file is deleted immediately after the Cloudinary upload.
     No permanent local storage is used.
     """
@@ -344,7 +344,7 @@ async def get_mis_clients(
 ):
     """
     Return list of clients with Cloudinary URLs for a batch.
-    Served entirely from MongoDB â€” no local files.
+    Served entirely from MongoDB - no local files.
     """
     batch = await get_batch_by_id(batch_id)
     if not batch:
@@ -464,7 +464,7 @@ async def download_client_file(
 ):
     """
     Redirect to Cloudinary URL for a generated or custom Excel file.
-    Served entirely from MongoDB â€” no local files.
+    Served entirely from MongoDB - no local files.
     """
     batch = await get_batch_by_id(batch_id)
     if not batch:

@@ -51,9 +51,9 @@ def generate_reset_token() -> tuple[str, str, datetime]:
     Returns
     -------
     (raw_token, token_hash, expiry)
-    raw_token  : str      — sent in the reset link (never stored)
-    token_hash : str      — SHA-256 hex digest stored in MongoDB
-    expiry     : datetime — UTC timestamp 30 minutes from now
+    raw_token  : str      - sent in the reset link (never stored)
+    token_hash : str      - SHA-256 hex digest stored in MongoDB
+    expiry     : datetime - UTC timestamp 30 minutes from now
     """
     raw_token  = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
