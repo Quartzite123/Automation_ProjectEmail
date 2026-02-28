@@ -92,6 +92,7 @@ async def send_mis_email(
         return {"status": "failed", "email": recipient_email, "message_id": None, "error": msg}
 
     # ── Step 3: Build MIME message ──────────────────────────────────────────
+    print("Updated MIS email template is being used")
     sender_addr = f"{settings.SES_SENDER_NAME} <{settings.SES_SENDER_EMAIL}>"
     subject     = f"MIS Report - {client_name}"
 
