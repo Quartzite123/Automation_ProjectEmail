@@ -1,73 +1,41 @@
-# Project Overview
+# Logistics Email Automation System
 
-The Automation project aims to provide a set of utilities for automating repetitive tasks using both JavaScript and Python.
+Cloud-based email automation platform designed to automate shipment notification workflows using Excel-based customer data processing.
 
-## Setup Instructions
+## Overview
 
-### JavaScript
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/ansarihashim/automation.git
-   cd automation
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Start the application:
-   ```bash
-   npm start
-   ```
+The system allows users to upload Excel files containing shipment information and automatically send personalized email notifications through AWS SES.
 
-### Python
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/ansarihashim/automation.git
-   cd automation
-   ```
-2. Create a virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows use: venv\Scripts\activate
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Run the application:
-   ```bash
-   python main.py
-   ```
+## Features
 
-## Basic Usage Examples
+- Excel-based bulk email automation
+- Personalized shipment notification emails
+- AWS SES integration
+- Role-based access system
+- Admin dashboard for monitoring and usage tracking
+- Deployment on Render and Vercel
+- Cloudinary-based file storage
+- Daily email usage limits and operational safeguards
 
-### JavaScript
-```javascript
-// Example usage of a utility function
-const utility = require('./utility');
-utility.doSomething();
-```
+## Tech Stack
 
-### Python
-```python
-# Example usage of a utility function
-from utility import do_something
+- Frontend: Vercel
+- Backend: Render
+- Cloud Services: AWS SES, IAM
+- Storage: Cloudinary
+- Excel Processing Workflows
 
-do_something()
-```
+## My Contributions
 
-## Configuration
+- Assisted in AWS SES setup and verification workflows
+- Worked on IAM configuration and access management discussions
+- Participated in DNS and domain verification setup
+- Contributed to deployment testing and troubleshooting
+- Coordinated with stakeholders during requirement discussions
+- Conducted research on cloud infrastructure and deployment strategies
 
-Configuration settings can be found in the respective config files for JavaScript and Python. Make sure to update those settings as needed for your environment.
+## Current Status
 
-## Development / Contributing Notes
-
-To contribute to this project:
-- Fork the repository
-- Create a feature branch
-- Make your changes
-- Open a pull request
-
-## License
-
-This project is licensed under the MIT License. See the LICENSE file for more details.
+- System deployed and operational in testing environment
+- AWS SES sandbox configuration completed
+- Production access and DNS verification in progress
